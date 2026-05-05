@@ -1103,7 +1103,7 @@ function cartHtml() {
 
 // ── Voice ────────────────────────────────────────────────────────────────────
 function toggleMic() {
-  if (listening) { rec.stop(); return; }
+  if (listening) { listening = false; rec.stop(); return; }
   micContext = 'store';
   transcript = ''; finalTranscript = ''; sessionResultCount = 0;
   listening = true;
@@ -1117,7 +1117,7 @@ function toggleMic() {
 
 function toggleCartMic() {
   if (!rec) return;
-  if (listening) { rec.stop(); return; }
+  if (listening) { listening = false; rec.stop(); return; }
   micContext = 'cart';
   transcript = ''; finalTranscript = ''; sessionResultCount = 0;
   listening = true;
