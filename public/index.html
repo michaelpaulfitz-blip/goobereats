@@ -705,7 +705,7 @@ let trendingProducts = null;
 
 // ── Voice ────────────────────────────────────────────────────────────────────
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let rec = null, listening = false, transcript = '', micContext = 'store';
+let rec = null, listening = false, transcript = '', finalTranscript = '', micContext = 'store';
 
 if (SR) {
   rec = new SR();
@@ -713,7 +713,13 @@ if (SR) {
   rec.lang = 'en-US';
   rec.interimResults = true;
   rec.onresult = e => {
-    transcript = Array.from(e.results).map(r => r[0].transcript).join('');
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) finalTranscript += t + ' ';
+      else interim = t;
+    }
+    transcript = (finalTranscript + interim).trim();
     const elId = micContext === 'cart' ? 'cart-mic-t' : 'mic-t';
     const el = document.getElementById(elId);
     if (el) el.textContent = '"' + transcript + '"';
@@ -1087,7 +1093,7 @@ function cartHtml() {
 function toggleMic() {
   if (listening) { rec.stop(); return; }
   micContext = 'store';
-  transcript = '';
+  transcript = ''; finalTranscript = '';
   listening = true;
   document.getElementById('mic-btn')?.classList.add('listening');
   const lbl = document.getElementById('mic-lbl');
@@ -1101,7 +1107,7 @@ function toggleCartMic() {
   if (!rec) return;
   if (listening) { rec.stop(); return; }
   micContext = 'cart';
-  transcript = '';
+  transcript = ''; finalTranscript = '';
   listening = true;
   document.getElementById('cart-mic-btn')?.classList.add('listening');
   const hint = document.getElementById('cart-mic-hint');
