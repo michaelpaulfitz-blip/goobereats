@@ -63,13 +63,13 @@ app.post('/api/chat', async (req, res) => {
             required: ['name', 'quantity', 'unit', 'searchQuery'],
           },
         },
-        clarifyingQuestions: {
+        assumptions: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Questions to ask when the user\'s intent is genuinely ambiguous (flavor, type, brand, size). Max 3.',
+          description: 'Brief notes on assumptions made (e.g. "Added Key Lime and Pamplemousse LaCroix since no flavor was specified"). Max 4.',
         },
       },
-      required: ['items', 'clarifyingQuestions'],
+      required: ['items', 'assumptions'],
     },
   };
 
@@ -83,12 +83,15 @@ app.post('/api/chat', async (req, res) => {
       model: 'claude-sonnet-4-6',
       max_tokens: 1024,
       system: `You are GooberEats, a friendly AI grocery shopping assistant.
-When the user describes what they need, parse it into a structured grocery list.
-- Infer ingredients for dish names (e.g. "lasagna" → lasagna noodles, ricotta, mozzarella, marinara sauce, ground beef)
+When the user describes what they need, parse it into a structured grocery list and make smart assumptions rather than asking questions.
+- Infer ingredients for dish names (e.g. "lasagna" → lasagna noodles, ricotta, mozzarella, marinara sauce, ground beef — assume meat unless told otherwise)
 - Use realistic grocery quantities (1 box, 2 lbs, 4 cases, etc.)
-- Only ask clarifying questions when genuinely ambiguous: flavor, type (e.g. cold brew concentrate vs ready-to-drink), brand preference, or size
-- Keep clarifying questions to a maximum of 3, and only ask the most important ones
-- For the searchQuery field, use the most effective Kroger search term (e.g. "lacroix sparkling water" not just "lacroix")
+- Make assumptions for ambiguous items and document them briefly:
+  * Unspecified flavors (e.g. LaCroix) → pick the 2-3 most popular (Key Lime, Pamplemousse, Coconut) as separate items
+  * Unspecified type (e.g. cold brew) → pick the most common format (ready-to-drink)
+  * Unspecified brand → choose a widely available option
+- Keep assumptions short and friendly (e.g. "Added Key Lime and Pamplemousse LaCroix — let me know if you'd like different flavors")
+- For the searchQuery field, use the most effective search term (e.g. "lacroix key lime sparkling water" not just "lacroix")
 Always call the parse_grocery_list tool.`,
       tools: [tool],
       tool_choice: { type: 'tool', name: 'parse_grocery_list' },
@@ -98,7 +101,10 @@ Always call the parse_grocery_list tool.`,
     const toolUse = response.content.find((b) => b.type === 'tool_use');
     if (!toolUse) throw new Error('Claude did not call the tool');
 
-    res.json(toolUse.input);
+    const result = toolUse.input;
+    // normalize: accept either 'assumptions' or legacy 'clarifyingQuestions' key
+    if (!result.assumptions) result.assumptions = result.clarifyingQuestions || [];
+    res.json(result);
   } catch (err) {
     console.error('Claude error:', err.message);
     res.status(500).json({ error: err.message });
@@ -142,6 +148,54 @@ app.get('/api/products', async (req, res) => {
     res.json(products);
   } catch (err) {
     console.error('Kroger products error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/trending — pre-fetched popular products (30-min server cache)
+const TRENDING_TERMS = [
+  'banana', 'apple', 'doritos chips', 'chicken thighs',
+  'cupcakes', 'lacroix sparkling water', 'wonder bread', 'eggs',
+  'whole milk', 'tropicana orange juice',
+];
+let trendingCache = { data: null, expiresAt: 0 };
+
+app.get('/api/trending', async (req, res) => {
+  if (trendingCache.data && Date.now() < trendingCache.expiresAt) {
+    return res.json(trendingCache.data);
+  }
+  try {
+    const token = await getKrogerToken();
+    const results = await Promise.all(
+      TRENDING_TERMS.map(term =>
+        fetch(`https://api.kroger.com/v1/products?${new URLSearchParams({ 'filter.term': term, 'filter.limit': '1' })}`,
+          { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } })
+          .then(r => r.json())
+          .then(data => {
+            const p = data.data?.[0];
+            if (!p) return null;
+            const priceInfo = p.items?.[0]?.price;
+            const imageUrl =
+              p.images?.find(img => img.perspective === 'front')?.sizes?.find(s => s.size === 'medium')?.url ||
+              p.images?.[0]?.sizes?.[0]?.url || null;
+            return {
+              productId: p.productId,
+              name: p.description,
+              brand: p.brand || '',
+              size: p.items?.[0]?.size || '',
+              price: priceInfo?.regular ?? priceInfo?.promo ?? null,
+              imageUrl,
+              inStock: p.items?.[0]?.fulfillment?.inStore ?? true,
+            };
+          })
+          .catch(() => null)
+      )
+    );
+    const data = results.filter(Boolean);
+    trendingCache = { data, expiresAt: Date.now() + 30 * 60 * 1000 };
+    res.json(data);
+  } catch (err) {
+    console.error('Trending error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
