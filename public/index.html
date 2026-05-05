@@ -705,19 +705,26 @@ let trendingProducts = null;
 
 // ── Voice ────────────────────────────────────────────────────────────────────
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let rec = null, listening = false, transcript = '', finalTranscript = '', micContext = 'store';
+let rec = null, listening = false, transcript = '', finalTranscript = '', sessionResultCount = 0, micContext = 'store';
 
 if (SR) {
   rec = new SR();
-  rec.continuous = true;
+  rec.continuous = false;
   rec.lang = 'en-US';
   rec.interimResults = true;
   rec.onresult = e => {
     let interim = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
+    // Only process new results from this session segment
+    for (let i = 0; i < e.results.length; i++) {
       const t = e.results[i][0].transcript;
-      if (e.results[i].isFinal) finalTranscript += t + ' ';
-      else interim = t;
+      if (e.results[i].isFinal) {
+        if (i >= sessionResultCount) {
+          finalTranscript += t + ' ';
+          sessionResultCount = i + 1;
+        }
+      } else {
+        interim = t;
+      }
     }
     transcript = (finalTranscript + interim).trim();
     const elId = micContext === 'cart' ? 'cart-mic-t' : 'mic-t';
@@ -725,7 +732,12 @@ if (SR) {
     if (el) el.textContent = '"' + transcript + '"';
   };
   rec.onend = () => {
-    listening = false;
+    if (listening) {
+      // User hasn't tapped to stop — restart to allow pauses mid-sentence
+      sessionResultCount = 0;
+      try { setTimeout(() => { if (listening) rec.start(); }, 150); } catch(e) {}
+      return;
+    }
     document.getElementById('mic-btn')?.classList.remove('listening');
     document.getElementById('cart-mic-btn')?.classList.remove('listening');
     const lbl = document.getElementById('mic-lbl');
@@ -737,7 +749,7 @@ if (SR) {
       else { S.userMsg = transcript.trim(); submitInput(); }
     }
   };
-  rec.onerror = () => { listening = false; };
+  rec.onerror = e => { if (e.error !== 'no-speech') listening = false; };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1093,7 +1105,7 @@ function cartHtml() {
 function toggleMic() {
   if (listening) { rec.stop(); return; }
   micContext = 'store';
-  transcript = ''; finalTranscript = '';
+  transcript = ''; finalTranscript = ''; sessionResultCount = 0;
   listening = true;
   document.getElementById('mic-btn')?.classList.add('listening');
   const lbl = document.getElementById('mic-lbl');
@@ -1107,7 +1119,7 @@ function toggleCartMic() {
   if (!rec) return;
   if (listening) { rec.stop(); return; }
   micContext = 'cart';
-  transcript = ''; finalTranscript = '';
+  transcript = ''; finalTranscript = ''; sessionResultCount = 0;
   listening = true;
   document.getElementById('cart-mic-btn')?.classList.add('listening');
   const hint = document.getElementById('cart-mic-hint');
